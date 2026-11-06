@@ -4,6 +4,7 @@ import (
 	"context"
 	"db/internal/models"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -103,7 +104,7 @@ func (repo *ReservationRepository) Create(
 		return nil, ErrProductNotFound
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("insert reservation: %w", err)
 	}
 	now := time.Now()
 	expiresAt := now.Add(time.Duration(dto.TTLSeconds) * time.Second)
@@ -140,7 +141,7 @@ func (repo *ReservationRepository) Create(
 			&reservation.IdempotencyKey, &reservation.CreatedAt,
 		)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("get existing reservation: %w", err)
 		}
 		if reservation.ProductID != product_id_and_priceDTO.ID ||
 			reservation.Qty != dto.Qty {
@@ -168,14 +169,14 @@ func (repo *ReservationRepository) Create(
 		dto.Qty, product_id_and_priceDTO.ID,
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("update stock: %w", err)
 	}
 	if result.RowsAffected() == 0 {
 		return nil, ErrOutOfStock // откат отменит и вставку
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("commit reservation transaction: %w", err)
 	}
 	response := models.ReservationResponse{
 		ID:          reservation.ID,

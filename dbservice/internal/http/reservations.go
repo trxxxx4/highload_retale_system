@@ -3,6 +3,7 @@ package http
 import (
 	"db/internal/models"
 	"db/internal/repository"
+	"log"
 
 	"encoding/json"
 	"errors"
@@ -99,6 +100,8 @@ func (h *ReservationCreateHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if err != nil {
+		log.Printf("Create reservation error: %v", err)
+
 		http.Error(
 			w,
 			"internal_server_error",
