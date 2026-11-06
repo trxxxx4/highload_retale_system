@@ -12,8 +12,7 @@ permissions:
   packages: write
 
 env:
-  IMAGE_NAMESPACE: ghcr.io/trxxxx4
-  STACK_NAME: myproject
+  IMAGE_NAMESPACE: ghcr.io/your-github-username
 
 jobs:
   deploy:
@@ -81,7 +80,7 @@ jobs:
           ssh-keyscan -p "${SSH_PORT:-22}" -H "$SSH_HOST" \
             >> ~/.ssh/known_hosts
 
-      # Create deployment directory
+      # Prepare server directories
       - name: Prepare server
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
@@ -89,7 +88,7 @@ jobs:
           SSH_PORT: ${{ secrets.SSH_PORT }}
         run: |
           ssh -p "${SSH_PORT:-22}" "$SSH_USER@$SSH_HOST" \
-            "mkdir -p /opt/myproject"
+            "mkdir -p /opt/myproject/dbservice /opt/myproject/authservice"
 
       # Copy deployment files
       - name: Copy deployment files
@@ -106,7 +105,15 @@ jobs:
             postgres nginx \
             "$SSH_USER@$SSH_HOST:/opt/myproject/"
 
-      # Deploy stack
+          scp -r -P "${SSH_PORT:-22}" \
+            dbservice/migrations \
+            "$SSH_USER@$SSH_HOST:/opt/myproject/dbservice/"
+
+          scp -r -P "${SSH_PORT:-22}" \
+            authservice/migrations \
+            "$SSH_USER@$SSH_HOST:/opt/myproject/authservice/"
+
+      # Deploy infrastructure, run migrations, deploy applications
       - name: Deploy to Docker Swarm
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
@@ -114,15 +121,97 @@ jobs:
           SSH_PORT: ${{ secrets.SSH_PORT }}
           DEPLOY_TAG: ${{ github.sha }}
         run: |
-          ssh -p "${SSH_PORT:-22}" "$SSH_USER@$SSH_HOST" \
-            "cd /opt/myproject &&
-             set -a &&
-             . ./.env &&
-             set +a &&
-             export TAG='${DEPLOY_TAG}' &&
-             export INITDB_CONFIG_VERSION=\$(sha256sum postgres/init-databases.sh | cut -c1-12) &&
-             export NGINX_CONFIG_VERSION=\$(sha256sum nginx/nginx.conf | cut -c1-12) &&
-             docker stack deploy \
-               --with-registry-auth \
-               -c stack.yaml \
-               ${STACK_NAME}"
+          ssh -p "${SSH_PORT:-22}" \
+            "$SSH_USER@$SSH_HOST" \
+            "DEPLOY_TAG='${DEPLOY_TAG}' bash -s" <<'REMOTE'
+
+          set -Eeuo pipefail
+
+          cd /opt/myproject
+
+          # Load server environment variables
+          set -a
+          . ./.env
+          set +a
+
+          export TAG="$DEPLOY_TAG"
+
+          # Generate versioned Docker config names
+          export INITDB_CONFIG_VERSION=$(
+            sha256sum postgres/init-databases.sh | cut -c1-12
+          )
+
+          export NGINX_CONFIG_VERSION=$(
+            sha256sum nginx/nginx.conf | cut -c1-12
+          )
+
+          # Stage 1: Start infrastructure without Go services
+          echo "Deploying infrastructure..."
+
+          export APP_REPLICAS=0
+
+          docker stack deploy \
+            --with-registry-auth \
+            -c stack.yaml \
+            "$STACK_NAME"
+
+          # Stage 2: Wait for PostgreSQL
+          echo "Waiting for PostgreSQL..."
+
+          for attempt in $(seq 1 60); do
+            if docker run --rm \
+              --network "${STACK_NAME}_app-network" \
+              postgres:16-alpine \
+              pg_isready \
+                -h postgres \
+                -U "$POSTGRES_USER" \
+                -d postgres \
+                >/dev/null 2>&1
+            then
+              echo "PostgreSQL is ready."
+              break
+            fi
+
+            if [ "$attempt" -eq 60 ]; then
+              echo "PostgreSQL did not become ready."
+              exit 1
+            fi
+
+            sleep 2
+          done
+
+          # Stage 3: Run DBService migrations
+          echo "Running DBService migrations..."
+
+          docker run --rm \
+            --network "${STACK_NAME}_app-network" \
+            -v /opt/myproject/dbservice/migrations:/migrations:ro \
+            migrate/migrate:4 \
+            -path=/migrations \
+            -database "$DB_CONNECT" \
+            up
+
+          # Stage 4: Run AuthService migrations
+          echo "Running AuthService migrations..."
+
+          docker run --rm \
+            --network "${STACK_NAME}_app-network" \
+            -v /opt/myproject/authservice/migrations:/migrations:ro \
+            migrate/migrate:4 \
+            -path=/migrations \
+            -database "$AUTH_CONNECT" \
+            up
+
+          # Stage 5: Start Go services
+          echo "Deploying Go services..."
+
+          export APP_REPLICAS=1
+
+          docker stack deploy \
+            --with-registry-auth \
+            -c stack.yaml \
+            "$STACK_NAME"
+
+          echo "Deployment completed successfully."
+
+          REMOTE

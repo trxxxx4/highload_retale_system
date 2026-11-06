@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
+
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -39,7 +40,11 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: redis-server --requirepass ${REDIS_PASSWORD}
+
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD}
 
     networks:
       app-network:
@@ -63,6 +68,7 @@ services:
           - dbservice
 
     deploy:
+      replicas: ${APP_REPLICAS:-1}
       restart_policy:
         condition: on-failure
 
@@ -76,7 +82,6 @@ services:
       JWT_ISSUER: ${JWT_ISSUER}
       JWT_TTL: ${JWT_TTL}
       DBSERVICE_URL: ${DBSERVICE_URL}
-      MIGRATE_VERSION: ${AUTH_SERVICE_MIGRATE_VERSION}
 
     networks:
       app-network:
@@ -84,6 +89,7 @@ services:
           - authservice
 
     deploy:
+      replicas: ${APP_REPLICAS:-1}
       restart_policy:
         condition: on-failure
 
@@ -104,6 +110,7 @@ services:
           - inventoryservice
 
     deploy:
+      replicas: ${APP_REPLICAS:-1}
       restart_policy:
         condition: on-failure
 
