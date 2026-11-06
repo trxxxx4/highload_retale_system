@@ -1,0 +1,3 @@
+.env.global
+**/.env
+init-databases.sh

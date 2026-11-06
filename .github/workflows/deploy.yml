@@ -1,0 +1,128 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAMESPACE: ghcr.io/trxxxx4
+  STACK_NAME: myproject
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build DBService
+      - name: Build DBService
+        uses: docker/build-push-action@v6
+        with:
+          context: ./dbservice
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ env.IMAGE_NAMESPACE }}/dbservice:${{ github.sha }}
+            ${{ env.IMAGE_NAMESPACE }}/dbservice:latest
+
+      # Build AuthService
+      - name: Build AuthService
+        uses: docker/build-push-action@v6
+        with:
+          context: ./authservice
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ env.IMAGE_NAMESPACE }}/authservice:${{ github.sha }}
+            ${{ env.IMAGE_NAMESPACE }}/authservice:latest
+
+      # Build InventoryService
+      - name: Build InventoryService
+        uses: docker/build-push-action@v6
+        with:
+          context: ./inventoryservice
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ env.IMAGE_NAMESPACE }}/inventoryservice:${{ github.sha }}
+            ${{ env.IMAGE_NAMESPACE }}/inventoryservice:latest
+
+      # SSH setup
+      - name: Setup SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+        run: |
+          mkdir -p ~/.ssh
+
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+          ssh-keyscan -p "${SSH_PORT:-22}" -H "$SSH_HOST" \
+            >> ~/.ssh/known_hosts
+
+      # Create deployment directory
+      - name: Prepare server
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+        run: |
+          ssh -p "${SSH_PORT:-22}" "$SSH_USER@$SSH_HOST" \
+            "mkdir -p /opt/myproject"
+
+      # Copy deployment files
+      - name: Copy deployment files
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+        run: |
+          scp -P "${SSH_PORT:-22}" \
+            stack.yaml \
+            "$SSH_USER@$SSH_HOST:/opt/myproject/"
+
+          scp -r -P "${SSH_PORT:-22}" \
+            postgres nginx \
+            "$SSH_USER@$SSH_HOST:/opt/myproject/"
+
+      # Deploy stack
+      - name: Deploy to Docker Swarm
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          DEPLOY_TAG: ${{ github.sha }}
+        run: |
+          ssh -p "${SSH_PORT:-22}" "$SSH_USER@$SSH_HOST" \
+            "cd /opt/myproject &&
+             set -a &&
+             . ./.env &&
+             set +a &&
+             export TAG='${DEPLOY_TAG}' &&
+             export INITDB_CONFIG_VERSION=\$(sha256sum postgres/init-databases.sh | cut -c1-12) &&
+             export NGINX_CONFIG_VERSION=\$(sha256sum nginx/nginx.conf | cut -c1-12) &&
+             docker stack deploy \
+               --with-registry-auth \
+               -c stack.yaml \
+               ${STACK_NAME}"
