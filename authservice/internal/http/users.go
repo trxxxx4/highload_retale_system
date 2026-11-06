@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 
@@ -76,7 +77,10 @@ func (h *UsersHandler) Register(
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	h.ClientDB.AddUser(context.Background(), *user)
+	err = h.ClientDB.AddUser(context.Background(), *user)
+	if err != nil {
+		log.Printf("add user in dbservice's table user error: %v", err)
+	}
 	if err := json.NewEncoder(w).Encode(user); err != nil {
 		return
 	}
