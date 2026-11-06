@@ -1,3 +1,4 @@
 .env.global
 **/.env
 init-databases.sh
+.env.example
