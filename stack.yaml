@@ -82,6 +82,8 @@ services:
       JWT_ISSUER: ${JWT_ISSUER}
       JWT_TTL: ${JWT_TTL}
       DBSERVICE_URL: ${DBSERVICE_URL}
+      MIGRATE_VERSION: ${AUTH_SERVICE_MIGRATE_VERSION}
+
 
     networks:
       app-network:
